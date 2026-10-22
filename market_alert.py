@@ -15,10 +15,16 @@ def send_telegram(msg):
 # ────────────────────────────────────────────
 
 def get_btc_price():
-    url = "https://fapi.binance.com/fapi/v1/premiumIndex"
+    # Binance 현물 API (가장 안정적)
+    url = "https://api.binance.com/api/v3/ticker/price"
     res = requests.get(url, params={"symbol": "BTCUSDT"})
+    print(f"가격 응답: {res.status_code} {res.text[:200]}")
     data = res.json()
-    return float(data["markPrice"])
+    if isinstance(data, list):
+        for item in data:
+            if item.get("symbol") == "BTCUSDT":
+                return float(item["price"])
+    return float(data["price"])
 
 def get_long_short_ratio():
     """전체 계정 롱/숏 비율"""
