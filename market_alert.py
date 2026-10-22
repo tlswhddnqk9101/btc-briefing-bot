@@ -24,20 +24,35 @@ def get_btc_price():
     return float(data["data"][0]["last"])
 
 def get_long_short_ratio():
-    """OKX 롱/숏 비율 - 응답형식: [timestamp, longShortRatio]"""
+    """OKX 전체 계정 롱/숏 비율"""
     try:
         url = "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio"
         res = requests.get(url, params={"ccy": "BTC", "period": "1H"})
         data = res.json()
         items = data.get("data", [])
         if items:
-            # [timestamp, ratio] — ratio = long/short
             ratio = float(items[0][1])
             long_pct = ratio / (1 + ratio) * 100
             short_pct = 100 - long_pct
             return ratio, long_pct, short_pct
     except Exception as e:
         print(f"롱숏 비율 오류: {e}")
+    return None, None, None
+
+def get_top_trader_ratio():
+    """OKX 탑트레이더 롱/숏 비율"""
+    try:
+        url = "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract-top-trader"
+        res = requests.get(url, params={"ccy": "BTC", "period": "1H"})
+        data = res.json()
+        items = data.get("data", [])
+        if items:
+            ratio = float(items[0][1])
+            long_pct = ratio / (1 + ratio) * 100
+            short_pct = 100 - long_pct
+            return ratio, long_pct, short_pct
+    except Exception as e:
+        print(f"탑트레이더 비율 오류: {e}")
     return None, None, None
 
 def get_liquidations():
@@ -170,11 +185,11 @@ def interpret_liquidations(long_liq, short_liq):
         return "청산 미미 — 조용한 구간", "조용"
     long_ratio = long_liq / total if total > 0 else 0.5
     if long_ratio >= 0.8:
-        return f"롱이 {long_ratio*100:.0f}% 청산당하는 중\n      → 하락 추세 진행 중", "하락"
+        return f"롱 {long_ratio*100:.0f}% 청산 — 하락 추세", "하락"
     elif long_ratio <= 0.2:
-        return f"숏이 {(1-long_ratio)*100:.0f}% 청산당하는 중\n      → 상승 추세 진행 중", "상승"
+        return f"숏 {(1-long_ratio)*100:.0f}% 청산 — 상승 추세", "상승"
     else:
-        return f"롱/숏 혼합 청산 (롱 {long_ratio*100:.0f}%)\n      → 변동성 구간", "혼합"
+        return f"롱/숏 혼합 청산 (롱 {long_ratio*100:.0f}%) — 변동성 구간", "혼합"
 
 def interpret_oi_change(change_usd):
     if change_usd is None:
@@ -184,75 +199,68 @@ def interpret_oi_change(change_usd):
         return "유입/유출 미미 — 관망 중", "미미"
     elif change_usd > 0:
         if abs_c > 10_000_000:
-            return "강한 매수세 유입 중\n      → 상승 모멘텀 강화", "강한유입"
+            return "강한 신규 매수 유입 — 상승 모멘텀", "강한유입"
         else:
-            return "매수세 유입 중\n      → 저점 매수 들어오는 중", "유입"
+            return "매수 유입 중 — 저점 매수 들어오는 중", "유입"
     else:
         if abs_c > 10_000_000:
-            return "강한 매도세 유출 중\n      → 하락 추세 강화", "강한유출"
+            return "강한 포지션 청산 — 하락 추세 강화", "강한유출"
         else:
-            return "포지션 정리 중\n      → 추세 약화 신호", "유출"
+            return "포지션 정리 중 — 추세 약화", "유출"
 
-def generate_direction(price, ls_state, liq_state, oi_state, max_pain, call_wall, put_wall):
-    lines = []
+def generate_direction(price, ls_state, top_state, liq_state, oi_state, max_pain, call_wall, put_wall):
     bear = sum([
         ls_state in ("과열", "우세"),
+        top_state in ("과열", "우세"),
         liq_state == "하락",
         oi_state in ("강한유출", "유출"),
     ])
     bull = sum([
         ls_state in ("숏과열", "숏우세"),
+        top_state in ("숏과열", "숏우세"),
         liq_state == "상승",
         oi_state in ("강한유입", "유입"),
     ])
 
-    if bear >= 3:
-        lines.append("📉 하락 압력 강함")
+    # 탑트레이더 vs 개인 엇갈림 (가장 중요한 시그널)
+    top_vs_retail_short = ls_state in ("과열", "우세") and top_state in ("숏과열", "숏우세")
+    top_vs_retail_long = ls_state in ("숏과열", "숏우세") and top_state in ("과열", "우세")
+
+    if top_vs_retail_short and liq_state == "하락":
+        now = "개인 롱 과열 + 탑트레이더 숏 + 롱 청산 진행 중"
+        then = "📉 숏 우위 — 반등 시 숏 진입 유리, 롱은 손절 빠르게"
+    elif top_vs_retail_short and oi_state in ("강한유출", "유출"):
+        now = "개인 롱 과열인데 탑트레이더는 숏, 자금도 빠지는 중"
+        then = "📉 하락 가능성 높음 — 롱 진입 금지, 숏 대기"
+    elif top_vs_retail_long and liq_state == "상승":
+        now = "개인 숏 과열 + 탑트레이더 롱 + 숏 청산 나오는 중"
+        then = "📈 롱 우위 — 눌림목에서 롱, 숏은 손절 빠르게"
+    elif top_vs_retail_long and oi_state in ("강한유입", "유입"):
+        now = "개인 숏인데 탑트레이더는 롱, 자금도 들어오는 중"
+        then = "📈 상승 가능성 높음 — 숏 진입 금지, 롱 대기"
+    elif bear >= 3:
+        now = "전체+탑트레이더 롱 과열, 청산 나오고 자금도 빠짐"
+        then = "📉 강한 하락 — 반등 짧게 보고 숏 유지"
     elif bear == 2 and bull == 0:
-        lines.append("📉 하락 우세")
-    elif bear == 2 and bull >= 1:
-        lines.append("📉 하락 중이지만 저점 매수 유입 중")
+        now = "하락 신호 2개, 받쳐주는 힘 없음"
+        then = "📉 흘러내릴 가능성 — 숏 유리, 롱은 관망"
     elif bull >= 3:
-        lines.append("📈 상승 모멘텀 강함")
+        now = "전체+탑트레이더 숏 과열, 청산 나오고 자금도 들어옴"
+        then = "📈 강한 상승 — 조정 짧게 보고 롱 유지"
     elif bull == 2 and bear == 0:
-        lines.append("📈 상승 우세")
+        now = "상승 신호 2개, 누르는 힘 없음"
+        then = "📈 올라갈 가능성 — 롱 유리, 숏은 관망"
+    elif liq_state == "혼합":
+        now = "롱/숏 동시 청산 — 변동성 구간"
+        then = "⚡ 방향 터질 수 있음 — 브레이크아웃 확인 후 진입"
     elif bull >= 1 and bear >= 1:
-        lines.append("↔️ 눈치보기 구간 (혼조)")
+        now = "상승/하락 신호 혼재"
+        then = "↔️ 횡보 가능성 — 방향 나오기 전까지 관망"
     else:
-        lines.append("↔️ 방향 불명확 — 관망")
+        now = "신호 없음"
+        then = "↔️ 관망"
 
-    if max_pain and put_wall and call_wall:
-        if price < put_wall:
-            lines.append(f"→ ${put_wall:,} 풋월 지지 확인 필요")
-            if oi_state in ("유입", "강한유입"):
-                lines.append(f"→ 지지 확인되면 ${max_pain:,} Max Pain까지 반등 가능")
-            lines.append(f"→ 반등 시 ${call_wall:,} 콜월 저항")
-        elif price > call_wall:
-            lines.append(f"→ ${call_wall:,} 콜월 돌파 시도 중")
-            if bear >= 2:
-                lines.append(f"→ 롱 과열 — 콜월 위에서 숏 유리")
-            else:
-                lines.append(f"→ 돌파 성공 시 추가 상승 가능")
-        else:
-            if price > max_pain:
-                lines.append(f"→ Max Pain(${max_pain:,}) 위 — 하방 압력 존재")
-                if bear >= 2:
-                    lines.append(f"→ ${put_wall:,} 풋월까지 흘러내릴 가능성")
-                lines.append(f"→ 반등 목표: ${call_wall:,} 콜월")
-            else:
-                lines.append(f"→ Max Pain(${max_pain:,}) 아래 — 상방 수렴 기대")
-                if bull >= 1:
-                    lines.append(f"→ ${max_pain:,}~${call_wall:,} 구간 반등 후 숏 유리")
-    else:
-        if bear >= 2 and bull >= 1:
-            lines.append("→ 현재 지지 확인되면 단기 반등 가능")
-            lines.append("→ 반등 후 저항선 근처에서 숏 유리")
-        elif bear >= 3:
-            lines.append("→ 지지선 이탈 시 추가 하락 대비")
-        elif bull >= 2:
-            lines.append("→ 저항선 돌파 시 추가 상승 가능")
-
-    return "\n".join(lines)
+    return "\n".join([now, then])
 
 # ────────────────────────────────────────────
 # 메인
@@ -263,14 +271,12 @@ def send_alert():
 
     price = get_btc_price()
     ls_ratio, ls_long, ls_short = get_long_short_ratio()
+    top_ratio, top_long, top_short = get_top_trader_ratio()
     long_liq, short_liq = get_liquidations()
     oi_change, oi_total = get_open_interest()
 
-    weekly_code = get_weekly_expiry()
-    options = fetch_options_for_expiry(weekly_code)
-    max_pain, call_wall, put_wall = calculate_levels(options) if options else (None, None, None)
-
     ls_label, ls_state = interpret_ls_ratio(ls_ratio, ls_long, ls_short) if ls_ratio else ("데이터 없음", "중립")
+    top_label, top_state = interpret_ls_ratio(top_ratio, top_long, top_short) if top_ratio else ("데이터 없음", "중립")
     liq_text, liq_state = interpret_liquidations(long_liq, short_liq)
     oi_text, oi_state = interpret_oi_change(oi_change)
 
@@ -279,10 +285,27 @@ def send_alert():
 
     msg += f"\n📊 포지션\n"
     if ls_ratio:
-        msg += f"롱/숏 비율  : {ls_ratio:.2f} {ls_label}\n"
+        msg += f"전체  : {ls_ratio:.2f} {ls_label}\n"
         msg += f"롱 {ls_long:.1f}% / 숏 {ls_short:.1f}%\n"
     else:
-        msg += f"롱/숏 비율  : 데이터 없음\n"
+        msg += f"전체  : 데이터 없음\n"
+    if top_ratio:
+        msg += f"탑트레이더 : {top_ratio:.2f} {top_label}\n"
+    else:
+        msg += f"탑트레이더 : 데이터 없음\n"
+    # 포지션 해석
+    if ls_state in ("과열", "우세") and top_state in ("숏과열", "숏우세"):
+        msg += f"→ 개인 롱 과열, 탑트레이더는 반대 — 개인 털릴 가능성\n"
+    elif ls_state in ("과열", "우세") and top_state in ("과열", "우세"):
+        msg += f"→ 전체+탑트레이더 모두 롱 과열 — 강한 하락 압력\n"
+    elif ls_state in ("숏과열", "숏우세") and top_state in ("과열", "우세"):
+        msg += f"→ 개인 숏, 탑트레이더 롱 — 숏 스퀴즈 주의\n"
+    elif ls_state in ("숏과열", "숏우세") and top_state in ("숏과열", "숏우세"):
+        msg += f"→ 전체+탑트레이더 모두 숏 과열 — 강한 반등 압력\n"
+    elif ls_state == "중립" and top_state == "중립":
+        msg += f"→ 방향 대기 중\n"
+    else:
+        msg += f"→ 혼조 — 방향 불명확\n"
 
     msg += f"\n💥 청산 (1시간)\n"
     if long_liq >= 1_000_000:
@@ -293,7 +316,7 @@ def send_alert():
         msg += f"숏 청산 : ${short_liq/1e6:.2f}M\n"
     else:
         msg += f"숏 청산 : ${short_liq/1000:.0f}K\n"
-    msg += f"해석 : {liq_text}\n"
+    msg += f"→ {liq_text}\n"
 
     msg += f"\n🌊 선물 유입/유출\n"
     if oi_change is not None:
@@ -302,11 +325,11 @@ def send_alert():
         msg += f"순유입 : {sign}${oi_change/1e6:.2f}M {color}\n"
     else:
         msg += f"순유입 : 데이터 없음\n"
-    msg += f"해석 : {oi_text}\n"
+    msg += f"→ {oi_text}\n"
 
     msg += f"\n------------------------------\n"
     msg += f"🧭 종합 방향\n"
-    msg += generate_direction(price, ls_state, liq_state, oi_state, max_pain, call_wall, put_wall)
+    msg += generate_direction(price, ls_state, top_state, liq_state, oi_state, None, None, None)
 
     result = send_telegram(msg)
     print("전송 완료:", result)
