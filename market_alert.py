@@ -48,7 +48,7 @@ def get_top_trader_ratio():
     ]
     for url in urls:
         try:
-            res = requests.get(url, params={"ccy": "BTC", "period": "1H"})
+            res = requests.get(url, params={"instId": "BTC-USDT-SWAP", "period": "1H"})
             print(f"탑트레이더 응답 ({url.split('/')[-1]}): {res.status_code} {res.text[:200]}")
             data = res.json()
             items = data.get("data", [])
