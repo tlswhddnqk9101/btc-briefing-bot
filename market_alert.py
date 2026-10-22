@@ -40,19 +40,25 @@ def get_long_short_ratio():
     return None, None, None
 
 def get_top_trader_ratio():
-    """OKX 탑트레이더 롱/숏 비율"""
-    try:
-        url = "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract-top-trader"
-        res = requests.get(url, params={"ccy": "BTC", "period": "1H"})
-        data = res.json()
-        items = data.get("data", [])
-        if items:
-            ratio = float(items[0][1])
-            long_pct = ratio / (1 + ratio) * 100
-            short_pct = 100 - long_pct
-            return ratio, long_pct, short_pct
-    except Exception as e:
-        print(f"탑트레이더 비율 오류: {e}")
+    """OKX 탑트레이더 롱/숏 비율 - 포지션 기준"""
+    # 포지션 기준 (더 정확)
+    urls = [
+        "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-position-ratio-contract-top-trader",
+        "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio-contract-top-trader",
+    ]
+    for url in urls:
+        try:
+            res = requests.get(url, params={"ccy": "BTC", "period": "1H"})
+            print(f"탑트레이더 응답 ({url.split('/')[-1]}): {res.status_code} {res.text[:200]}")
+            data = res.json()
+            items = data.get("data", [])
+            if items:
+                ratio = float(items[0][1])
+                long_pct = ratio / (1 + ratio) * 100
+                short_pct = 100 - long_pct
+                return ratio, long_pct, short_pct
+        except Exception as e:
+            print(f"탑트레이더 비율 오류 ({url}): {e}")
     return None, None, None
 
 def get_liquidations():
