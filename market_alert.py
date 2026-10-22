@@ -50,6 +50,7 @@ def get_liquidations():
         res = requests.get(url, params={
             "instType": "SWAP",
             "uly": "BTC-USDT",
+            "state": "filled",
             "limit": 100
         })
         print(f"청산 응답: {res.status_code} {res.text[:400]}")
