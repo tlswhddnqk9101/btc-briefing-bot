@@ -41,20 +41,34 @@ def get_long_short_ratio():
     return None, None, None
 
 def get_liquidations():
-    """OKX 청산 데이터 - rubik 통계 API 사용"""
+    """OKX 청산 데이터 - public liquidation-orders API"""
+    long_liq = 0.0
+    short_liq = 0.0
     try:
-        # [ts, longLiqUsd, shortLiqUsd]
-        url = "https://www.okx.com/api/v5/rubik/stat/contracts/liquidation-volume"
-        res = requests.get(url, params={"ccy": "BTC", "period": "1H"})
+        url = "https://www.okx.com/api/v5/public/liquidation-orders"
+        # uly 파라미터로 BTC 선물 전체 조회
+        res = requests.get(url, params={
+            "instType": "SWAP",
+            "uly": "BTC-USDT",
+            "limit": 100
+        })
+        print(f"청산 응답: {res.status_code} {res.text[:400]}")
         data = res.json()
         items = data.get("data", [])
-        if items:
-            long_liq = float(items[0][1])
-            short_liq = float(items[0][2])
-            return long_liq, short_liq
+        for item in items:
+            details = item.get("details", [])
+            for d in details:
+                sz = float(d.get("sz", 0))
+                px = float(d.get("bkPx", 0))
+                side = d.get("side", "")
+                val = sz * px
+                if side == "sell":   # 롱 포지션 청산
+                    long_liq += val
+                elif side == "buy":  # 숏 포지션 청산
+                    short_liq += val
     except Exception as e:
         print(f"청산 데이터 오류: {e}")
-    return 0.0, 0.0
+    return long_liq, short_liq
 
 def get_open_interest():
     """OKX OI 변화 (선물 유입/유출) - OI는 계약수가 아닌 USD 기준"""
