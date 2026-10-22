@@ -4,10 +4,6 @@ from datetime import datetime, timezone, timedelta
 TELEGRAM_TOKEN = "8784146347:AAGdLHuXObJih1sXPbRFbTn94QylxlGeVcs"
 CHAT_ID = "531163029"
 
-BITGET_BASE = "https://api.bitget.com/api/v2/mix/market"
-SYMBOL = "BTCUSDT"
-PRODUCT = "USDT-FUTURES"
-
 def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": msg}
@@ -15,89 +11,76 @@ def send_telegram(msg):
     return res.json()
 
 # ────────────────────────────────────────────
-# 비트겟 데이터
+# 바이낸스 데이터
 # ────────────────────────────────────────────
 
 def get_btc_price():
-    url = f"{BITGET_BASE}/ticker"
-    res = requests.get(url, params={"symbol": SYMBOL, "productType": PRODUCT})
-    data = res.json()
-    return float(data["data"][0]["lastPr"])
+    url = "https://fapi.binance.com/fapi/v1/ticker/price"
+    res = requests.get(url, params={"symbol": "BTCUSDT"})
+    return float(res.json()["price"])
 
 def get_long_short_ratio():
     """전체 계정 롱/숏 비율"""
-    url = f"{BITGET_BASE}/long-short-ratio"
-    res = requests.get(url, params={"symbol": SYMBOL, "productType": PRODUCT, "period": "1h", "limit": 1})
+    url = "https://fapi.binance.com/fapi/v1/globalLongShortAccountRatio"
+    res = requests.get(url, params={"symbol": "BTCUSDT", "period": "1h", "limit": 1})
     data = res.json()
-    if data.get("data"):
-        d = data["data"][0]
-        long_pct = float(d["longRatio"]) * 100
-        short_pct = float(d["shortRatio"]) * 100
-        ratio = long_pct / short_pct if short_pct > 0 else 99
+    if data:
+        ratio = float(data[0]["longShortRatio"])
+        long_pct = float(data[0]["longAccount"]) * 100
+        short_pct = float(data[0]["shortAccount"]) * 100
         return ratio, long_pct, short_pct
     return None, None, None
 
 def get_top_trader_ratio():
-    """탑트레이더 롱/숏 비율 (포지션 기준)"""
-    url = f"{BITGET_BASE}/long-short-ratio"
-    res = requests.get(url, params={"symbol": SYMBOL, "productType": PRODUCT, "period": "1h", "limit": 1})
+    """탑트레이더 롱/숏 비율"""
+    url = "https://fapi.binance.com/fapi/v1/topLongShortAccountRatio"
+    res = requests.get(url, params={"symbol": "BTCUSDT", "period": "1h", "limit": 1})
     data = res.json()
-    # 비트겟은 탑트레이더 별도 엔드포인트 없음 → 동일 데이터 활용
-    if data.get("data"):
-        d = data["data"][0]
-        long_pct = float(d["longRatio"]) * 100
-        short_pct = float(d["shortRatio"]) * 100
-        ratio = long_pct / short_pct if short_pct > 0 else 99
+    if data:
+        ratio = float(data[0]["longShortRatio"])
+        long_pct = float(data[0]["longAccount"]) * 100
+        short_pct = float(data[0]["shortAccount"]) * 100
         return ratio, long_pct, short_pct
     return None, None, None
 
 def get_liquidations():
     """최근 1시간 청산 데이터"""
-    url = f"{BITGET_BASE}/liquidation-order"
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    one_hour_ago = now_ms - 3600000
-
+    url = "https://fapi.binance.com/fapi/v1/forceOrders"
+    now = int(datetime.now(timezone.utc).timestamp() * 1000)
+    one_hour_ago = now - 3600000
     long_liq = 0.0
     short_liq = 0.0
-
     try:
-        for side in ["long", "short"]:
+        for side in ["SELL", "BUY"]:
             res = requests.get(url, params={
-                "symbol": SYMBOL,
-                "productType": PRODUCT,
+                "symbol": "BTCUSDT",
                 "side": side,
                 "startTime": one_hour_ago,
-                "endTime": now_ms,
-                "limit": 100
+                "endTime": now,
+                "limit": 1000
             })
-            data = res.json()
-            if data.get("data"):
-                for order in data["data"]:
-                    val = float(order.get("fillSize", 0)) * float(order.get("fillPr", 0))
-                    if side == "long":
-                        long_liq += val
-                    else:
-                        short_liq += val
+            orders = res.json()
+            if isinstance(orders, list):
+                total = sum(float(o.get("origQty", 0)) * float(o.get("price", 0)) for o in orders)
+                if side == "SELL":
+                    long_liq = total
+                else:
+                    short_liq = total
     except Exception as e:
         print(f"청산 데이터 오류: {e}")
-
     return long_liq, short_liq
 
 def get_open_interest():
-    """미결제약정 변화 (유입/유출)"""
-    url = f"{BITGET_BASE}/open-interest-history"
-    res = requests.get(url, params={
-        "symbol": SYMBOL,
-        "productType": PRODUCT,
-        "period": "1h",
-        "limit": 2
-    })
+    """선물 미결제약정 변화"""
+    url = "https://fapi.binance.com/fapi/v1/openInterestHist"
+    res = requests.get(url, params={"symbol": "BTCUSDT", "period": "1h", "limit": 2})
     data = res.json()
-    if data.get("data") and len(data["data"]) >= 2:
-        latest = float(data["data"][-1]["openInterestValue"])
-        prev = float(data["data"][-2]["openInterestValue"])
-        change = latest - prev
-        return change, latest
+    if len(data) >= 2:
+        latest_oi = float(data[-1]["sumOpenInterest"])
+        prev_oi = float(data[-2]["sumOpenInterest"])
+        price = get_btc_price()
+        change_usd = (latest_oi - prev_oi) * price
+        return change_usd, latest_oi * price
     return None, None
 
 # ────────────────────────────────────────────
