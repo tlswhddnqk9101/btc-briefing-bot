@@ -304,10 +304,14 @@ def send_alert():
         msg += f"→ 개인 롱 과열, 탑트레이더는 반대 — 개인 털릴 가능성\n"
     elif ls_state in ("과열", "우세") and top_state in ("과열", "우세"):
         msg += f"→ 전체+탑트레이더 모두 롱 과열 — 강한 하락 압력\n"
+    elif ls_state in ("과열", "우세") and top_state == "중립":
+        msg += f"→ 개인만 롱 과열, 탑트레이더는 관망 — 하락 나오면 빠르게 밀릴 수 있음\n"
     elif ls_state in ("숏과열", "숏우세") and top_state in ("과열", "우세"):
         msg += f"→ 개인 숏, 탑트레이더 롱 — 숏 스퀴즈 주의\n"
     elif ls_state in ("숏과열", "숏우세") and top_state in ("숏과열", "숏우세"):
         msg += f"→ 전체+탑트레이더 모두 숏 과열 — 강한 반등 압력\n"
+    elif ls_state in ("숏과열", "숏우세") and top_state == "중립":
+        msg += f"→ 개인만 숏 과열, 탑트레이더는 관망 — 반등 나오면 빠르게 튈 수 있음\n"
     elif ls_state == "중립" and top_state == "중립":
         msg += f"→ 방향 대기 중\n"
     else:
