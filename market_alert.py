@@ -18,6 +18,8 @@ def get_btc_price():
     """Bybit 현재가"""
     url = "https://api.bybit.com/v5/market/tickers"
     res = requests.get(url, params={"category": "linear", "symbol": "BTCUSDT"})
+    print(f"가격 응답 상태코드: {res.status_code}")
+    print(f"가격 응답 내용: {res.text[:300]}")
     data = res.json()
     return float(data["result"]["list"][0]["lastPrice"])
 
