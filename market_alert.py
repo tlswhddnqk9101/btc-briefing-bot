@@ -28,10 +28,10 @@ def get_long_short_ratio():
     try:
         url = "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio"
         res = requests.get(url, params={"ccy": "BTC", "period": "1H"})
+        print(f"롱숏 응답: {res.status_code} {res.text[:300]}")
         data = res.json()
         items = data.get("data", [])
         if items:
-            # 최신 데이터 (첫번째)
             long_pct = float(items[0][1]) * 100
             short_pct = float(items[0][2]) * 100
             ratio = long_pct / short_pct if short_pct > 0 else 1.0
@@ -70,18 +70,20 @@ def get_liquidations():
     return long_liq, short_liq
 
 def get_open_interest():
-    """OKX OI 변화 (선물 유입/유출)"""
+    """OKX OI 변화 (선물 유입/유출) - OI는 계약수가 아닌 USD 기준"""
     try:
+        # open-interest-volume: [ts, oi_usd, volume_usd]
         url = "https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-volume"
         res = requests.get(url, params={"ccy": "BTC", "period": "1H"})
+        print(f"OI 응답: {res.status_code} {res.text[:300]}")
         data = res.json()
         items = data.get("data", [])
         if len(items) >= 2:
+            # items[0][1] = OI in USD (이미 달러 환산된 값)
             latest_oi = float(items[0][1])
             prev_oi = float(items[1][1])
-            price = get_btc_price()
-            change_usd = (latest_oi - prev_oi) * price
-            return change_usd, latest_oi * price
+            change_usd = latest_oi - prev_oi
+            return change_usd, latest_oi
     except Exception as e:
         print(f"OI 오류: {e}")
     return None, None
