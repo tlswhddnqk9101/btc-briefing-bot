@@ -15,15 +15,10 @@ def send_telegram(msg):
 # ────────────────────────────────────────────
 
 def get_btc_price():
-    url = "https://fapi.binance.com/fapi/v1/ticker/price"
+    url = "https://fapi.binance.com/fapi/v1/premiumIndex"
     res = requests.get(url, params={"symbol": "BTCUSDT"})
     data = res.json()
-    # 리스트로 올 때와 딕셔너리로 올 때 모두 처리
-    if isinstance(data, list):
-        for item in data:
-            if item.get("symbol") == "BTCUSDT":
-                return float(item["price"])
-    return float(data["price"])
+    return float(data["markPrice"])
 
 def get_long_short_ratio():
     """전체 계정 롱/숏 비율"""
