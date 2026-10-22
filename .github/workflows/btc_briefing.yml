@@ -1,0 +1,20 @@
+name: BTC Briefing Bot
+
+on:
+  schedule:
+    - cron: '0 9 * * *'  # 매일 09:00 UTC = 18:00 KST
+  workflow_dispatch:
+
+jobs:
+  run-briefing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests
+      - name: Run briefing
+        run: python btc_briefing.py
