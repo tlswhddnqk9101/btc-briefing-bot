@@ -11,80 +11,83 @@ def send_telegram(msg):
     return res.json()
 
 # ────────────────────────────────────────────
-# 바이낸스 데이터
+# Bybit 데이터 (지역 제한 없음)
 # ────────────────────────────────────────────
 
 def get_btc_price():
-    # Binance 현물 API (가장 안정적)
-    url = "https://api.binance.com/api/v3/ticker/price"
-    res = requests.get(url, params={"symbol": "BTCUSDT"})
-    print(f"가격 응답: {res.status_code} {res.text[:200]}")
+    """Bybit 현재가"""
+    url = "https://api.bybit.com/v5/market/tickers"
+    res = requests.get(url, params={"category": "linear", "symbol": "BTCUSDT"})
     data = res.json()
-    if isinstance(data, list):
-        for item in data:
-            if item.get("symbol") == "BTCUSDT":
-                return float(item["price"])
-    return float(data["price"])
+    return float(data["result"]["list"][0]["lastPrice"])
 
 def get_long_short_ratio():
-    """전체 계정 롱/숏 비율"""
-    url = "https://fapi.binance.com/fapi/v1/globalLongShortAccountRatio"
-    res = requests.get(url, params={"symbol": "BTCUSDT", "period": "1h", "limit": 1})
+    """Bybit 롱/숏 비율 (전체 계정)"""
+    url = "https://api.bybit.com/v5/market/account-ratio"
+    res = requests.get(url, params={
+        "category": "linear",
+        "symbol": "BTCUSDT",
+        "period": "1h",
+        "limit": 1
+    })
     data = res.json()
-    if data:
-        ratio = float(data[0]["longShortRatio"])
-        long_pct = float(data[0]["longAccount"]) * 100
-        short_pct = float(data[0]["shortAccount"]) * 100
-        return ratio, long_pct, short_pct
-    return None, None, None
-
-def get_top_trader_ratio():
-    """탑트레이더 롱/숏 비율"""
-    url = "https://fapi.binance.com/fapi/v1/topLongShortAccountRatio"
-    res = requests.get(url, params={"symbol": "BTCUSDT", "period": "1h", "limit": 1})
-    data = res.json()
-    if data:
-        ratio = float(data[0]["longShortRatio"])
-        long_pct = float(data[0]["longAccount"]) * 100
-        short_pct = float(data[0]["shortAccount"]) * 100
+    items = data.get("result", {}).get("list", [])
+    if items:
+        buy_ratio = float(items[0]["buyRatio"])
+        sell_ratio = float(items[0]["sellRatio"])
+        long_pct = buy_ratio * 100
+        short_pct = sell_ratio * 100
+        ratio = buy_ratio / sell_ratio if sell_ratio > 0 else 1.0
         return ratio, long_pct, short_pct
     return None, None, None
 
 def get_liquidations():
-    """최근 1시간 청산 데이터"""
-    url = "https://fapi.binance.com/fapi/v1/forceOrders"
-    now = int(datetime.now(timezone.utc).timestamp() * 1000)
-    one_hour_ago = now - 3600000
+    """Bybit 최근 1시간 청산 데이터"""
+    url = "https://api.bybit.com/v5/market/liquidations"
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    one_hour_ago_ms = now_ms - 3600000
+
     long_liq = 0.0
     short_liq = 0.0
+
     try:
-        for side in ["SELL", "BUY"]:
+        # Buy side = 숏 포지션 청산 (숏 청산)
+        # Sell side = 롱 포지션 청산 (롱 청산)
+        for side in ["Buy", "Sell"]:
             res = requests.get(url, params={
+                "category": "linear",
                 "symbol": "BTCUSDT",
                 "side": side,
-                "startTime": one_hour_ago,
-                "endTime": now,
-                "limit": 1000
+                "startTime": one_hour_ago_ms,
+                "endTime": now_ms,
+                "limit": 200
             })
-            orders = res.json()
-            if isinstance(orders, list):
-                total = sum(float(o.get("origQty", 0)) * float(o.get("price", 0)) for o in orders)
-                if side == "SELL":
-                    long_liq = total
-                else:
-                    short_liq = total
+            orders = res.json().get("result", {}).get("list", [])
+            total = sum(float(o.get("qty", 0)) * float(o.get("price", 0)) for o in orders)
+            if side == "Sell":
+                long_liq = total  # 롱 포지션이 청산됨
+            else:
+                short_liq = total  # 숏 포지션이 청산됨
     except Exception as e:
         print(f"청산 데이터 오류: {e}")
+
     return long_liq, short_liq
 
 def get_open_interest():
-    """선물 미결제약정 변화"""
-    url = "https://fapi.binance.com/fapi/v1/openInterestHist"
-    res = requests.get(url, params={"symbol": "BTCUSDT", "period": "1h", "limit": 2})
+    """Bybit OI 변화 (선물 유입/유출)"""
+    url = "https://api.bybit.com/v5/market/open-interest"
+    res = requests.get(url, params={
+        "category": "linear",
+        "symbol": "BTCUSDT",
+        "intervalTime": "1h",
+        "limit": 2
+    })
     data = res.json()
-    if len(data) >= 2:
-        latest_oi = float(data[-1]["sumOpenInterest"])
-        prev_oi = float(data[-2]["sumOpenInterest"])
+    items = data.get("result", {}).get("list", [])
+    if len(items) >= 2:
+        # list[0]이 최신, list[1]이 이전
+        latest_oi = float(items[0]["openInterest"])
+        prev_oi = float(items[1]["openInterest"])
         price = get_btc_price()
         change_usd = (latest_oi - prev_oi) * price
         return change_usd, latest_oi * price
@@ -154,15 +157,15 @@ def calculate_levels(options):
 
 def interpret_ls_ratio(ratio, long_pct, short_pct):
     if ratio >= 2.0:
-        return f"🔴 롱 과열", "과열"
+        return "🔴 롱 과열", "과열"
     elif ratio >= 1.3:
-        return f"🟡 롱 우세", "우세"
+        return "🟡 롱 우세", "우세"
     elif ratio <= 0.7:
-        return f"🔵 숏 과열", "숏과열"
+        return "🔵 숏 과열", "숏과열"
     elif ratio <= 0.9:
-        return f"🟡 숏 우세", "숏우세"
+        return "🟡 숏 우세", "숏우세"
     else:
-        return f"⚪ 중립", "중립"
+        return "⚪ 중립", "중립"
 
 def interpret_liquidations(long_liq, short_liq):
     total = long_liq + short_liq
@@ -181,29 +184,27 @@ def interpret_oi_change(change_usd):
         return "데이터 없음", "없음"
     abs_c = abs(change_usd)
     if abs_c < 1_000_000:
-        return f"유입/유출 미미 — 관망 중", "미미"
+        return "유입/유출 미미 — 관망 중", "미미"
     elif change_usd > 0:
         if abs_c > 10_000_000:
-            return f"강한 매수세 유입 중\n      → 상승 모멘텀 강화", "강한유입"
+            return "강한 매수세 유입 중\n      → 상승 모멘텀 강화", "강한유입"
         else:
-            return f"매수세 유입 중\n      → 하락 속에서도 저점 매수 들어오는 중", "유입"
+            return "매수세 유입 중\n      → 저점 매수 들어오는 중", "유입"
     else:
         if abs_c > 10_000_000:
-            return f"강한 매도세 유출 중\n      → 하락 추세 강화", "강한유출"
+            return "강한 매도세 유출 중\n      → 하락 추세 강화", "강한유출"
         else:
-            return f"포지션 정리 중\n      → 추세 약화 신호", "유출"
+            return "포지션 정리 중\n      → 추세 약화 신호", "유출"
 
-def generate_direction(price, ls_state, top_state, liq_state, oi_state, max_pain, call_wall, put_wall):
+def generate_direction(price, ls_state, liq_state, oi_state, max_pain, call_wall, put_wall):
     lines = []
     bear = sum([
         ls_state in ("과열", "우세"),
-        top_state in ("과열", "우세"),
         liq_state == "하락",
         oi_state in ("강한유출", "유출"),
     ])
     bull = sum([
         ls_state in ("숏과열", "숏우세"),
-        top_state in ("숏과열", "숏우세"),
         liq_state == "상승",
         oi_state in ("강한유입", "유입"),
     ])
@@ -228,7 +229,7 @@ def generate_direction(price, ls_state, top_state, liq_state, oi_state, max_pain
             lines.append(f"→ ${put_wall:,} 풋월 지지 확인 필요")
             if oi_state in ("유입", "강한유입"):
                 lines.append(f"→ 지지 확인되면 ${max_pain:,} Max Pain까지 반등 가능")
-            lines.append(f"→ 반등 시 ${call_wall:,} 콜월 저항 — 숏 기회 탐색")
+            lines.append(f"→ 반등 시 ${call_wall:,} 콜월 저항")
         elif price > call_wall:
             lines.append(f"→ ${call_wall:,} 콜월 돌파 시도 중")
             if bear >= 2:
@@ -265,7 +266,6 @@ def send_alert():
 
     price = get_btc_price()
     ls_ratio, ls_long, ls_short = get_long_short_ratio()
-    top_ratio, top_long, top_short = get_top_trader_ratio()
     long_liq, short_liq = get_liquidations()
     oi_change, oi_total = get_open_interest()
 
@@ -274,36 +274,28 @@ def send_alert():
     max_pain, call_wall, put_wall = calculate_levels(options) if options else (None, None, None)
 
     ls_label, ls_state = interpret_ls_ratio(ls_ratio, ls_long, ls_short) if ls_ratio else ("데이터 없음", "중립")
-    top_label, top_state = interpret_ls_ratio(top_ratio, top_long, top_short) if top_ratio else ("데이터 없음", "중립")
     liq_text, liq_state = interpret_liquidations(long_liq, short_liq)
     oi_text, oi_state = interpret_oi_change(oi_change)
 
-    # 포지션 종합 해석
-    if ls_state == top_state and ls_state == "과열":
-        pos_interp = "고래랑 개인 모두 롱 과열\n      → 반전 하락 가능성 높음"
-    elif ls_state == top_state and ls_state == "숏과열":
-        pos_interp = "고래랑 개인 모두 숏 과열\n      → 숏 스퀴즈 가능성"
-    elif ls_state in ("과열",) and top_state not in ("과열",):
-        pos_interp = "개인 롱 과열, 탑트레이더는 신중\n      → 개인 물량 털릴 가능성"
-    elif ls_state == "중립" and top_state == "중립":
-        pos_interp = "롱/숏 균형 — 방향 결정 대기 중"
-    else:
-        pos_interp = f"혼조세 — 눈치 보는 중"
-
-    # 메시지 조립
     msg = f"⚡ BTC 시장 현황 ({time_str})\n"
     msg += f"현재가 : ${price:,.0f}\n"
 
     msg += f"\n📊 포지션\n"
     if ls_ratio:
         msg += f"롱/숏 비율  : {ls_ratio:.2f} {ls_label}\n"
-    if top_ratio:
-        msg += f"탑트레이더 : {top_ratio:.2f} {top_label}\n"
-    msg += f"해석 : {pos_interp}\n"
+        msg += f"롱 {ls_long:.1f}% / 숏 {ls_short:.1f}%\n"
+    else:
+        msg += f"롱/숏 비율  : 데이터 없음\n"
 
     msg += f"\n💥 청산 (1시간)\n"
-    msg += f"롱 청산 : ${ long_liq/1e6:.2f}M\n" if long_liq >= 1_000_000 else f"롱 청산 : ${long_liq/1000:.0f}K\n"
-    msg += f"숏 청산 : ${short_liq/1e6:.2f}M\n" if short_liq >= 1_000_000 else f"숏 청산 : ${short_liq/1000:.0f}K\n"
+    if long_liq >= 1_000_000:
+        msg += f"롱 청산 : ${long_liq/1e6:.2f}M\n"
+    else:
+        msg += f"롱 청산 : ${long_liq/1000:.0f}K\n"
+    if short_liq >= 1_000_000:
+        msg += f"숏 청산 : ${short_liq/1e6:.2f}M\n"
+    else:
+        msg += f"숏 청산 : ${short_liq/1000:.0f}K\n"
     msg += f"해석 : {liq_text}\n"
 
     msg += f"\n🌊 선물 유입/유출\n"
@@ -317,7 +309,7 @@ def send_alert():
 
     msg += f"\n------------------------------\n"
     msg += f"🧭 종합 방향\n"
-    msg += generate_direction(price, ls_state, top_state, liq_state, oi_state, max_pain, call_wall, put_wall)
+    msg += generate_direction(price, ls_state, liq_state, oi_state, max_pain, call_wall, put_wall)
 
     result = send_telegram(msg)
     print("전송 완료:", result)
