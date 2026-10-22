@@ -15,84 +15,75 @@ def send_telegram(msg):
 # ────────────────────────────────────────────
 
 def get_btc_price():
-    """Bybit 현재가"""
-    url = "https://api.bybit.com/v5/market/tickers"
-    res = requests.get(url, params={"category": "linear", "symbol": "BTCUSDT"})
+    """OKX 현재가"""
+    url = "https://www.okx.com/api/v5/market/ticker"
+    res = requests.get(url, params={"instId": "BTC-USDT-SWAP"})
     print(f"가격 응답 상태코드: {res.status_code}")
-    print(f"가격 응답 내용: {res.text[:300]}")
+    print(f"가격 응답 내용: {res.text[:200]}")
     data = res.json()
-    return float(data["result"]["list"][0]["lastPrice"])
+    return float(data["data"][0]["last"])
 
 def get_long_short_ratio():
-    """Bybit 롱/숏 비율 (전체 계정)"""
-    url = "https://api.bybit.com/v5/market/account-ratio"
-    res = requests.get(url, params={
-        "category": "linear",
-        "symbol": "BTCUSDT",
-        "period": "1h",
-        "limit": 1
-    })
-    data = res.json()
-    items = data.get("result", {}).get("list", [])
-    if items:
-        buy_ratio = float(items[0]["buyRatio"])
-        sell_ratio = float(items[0]["sellRatio"])
-        long_pct = buy_ratio * 100
-        short_pct = sell_ratio * 100
-        ratio = buy_ratio / sell_ratio if sell_ratio > 0 else 1.0
-        return ratio, long_pct, short_pct
+    """OKX 롱/숏 비율"""
+    try:
+        url = "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio"
+        res = requests.get(url, params={"ccy": "BTC", "period": "1H"})
+        data = res.json()
+        items = data.get("data", [])
+        if items:
+            # 최신 데이터 (첫번째)
+            long_pct = float(items[0][1]) * 100
+            short_pct = float(items[0][2]) * 100
+            ratio = long_pct / short_pct if short_pct > 0 else 1.0
+            return ratio, long_pct, short_pct
+    except Exception as e:
+        print(f"롱숏 비율 오류: {e}")
     return None, None, None
 
 def get_liquidations():
-    """Bybit 최근 1시간 청산 데이터"""
-    url = "https://api.bybit.com/v5/market/liquidations"
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    one_hour_ago_ms = now_ms - 3600000
-
+    """OKX 최근 1시간 청산 데이터"""
     long_liq = 0.0
     short_liq = 0.0
-
     try:
-        # Buy side = 숏 포지션 청산 (숏 청산)
-        # Sell side = 롱 포지션 청산 (롱 청산)
-        for side in ["Buy", "Sell"]:
+        url = "https://www.okx.com/api/v5/public/liquidation-orders"
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        one_hour_ago_ms = now_ms - 3600000
+        for side in ["buy", "sell"]:
             res = requests.get(url, params={
-                "category": "linear",
-                "symbol": "BTCUSDT",
+                "instType": "SWAP",
+                "instId": "BTC-USDT-SWAP",
                 "side": side,
-                "startTime": one_hour_ago_ms,
-                "endTime": now_ms,
-                "limit": 200
+                "begin": one_hour_ago_ms,
+                "end": now_ms,
+                "limit": 100
             })
-            orders = res.json().get("result", {}).get("list", [])
-            total = sum(float(o.get("qty", 0)) * float(o.get("price", 0)) for o in orders)
-            if side == "Sell":
-                long_liq = total  # 롱 포지션이 청산됨
-            else:
-                short_liq = total  # 숏 포지션이 청산됨
+            items = res.json().get("data", [])
+            for item in items:
+                details = item.get("details", [])
+                total = sum(float(d.get("sz", 0)) * float(d.get("bkPx", 0)) for d in details)
+                if side == "sell":
+                    long_liq += total
+                else:
+                    short_liq += total
     except Exception as e:
         print(f"청산 데이터 오류: {e}")
-
     return long_liq, short_liq
 
 def get_open_interest():
-    """Bybit OI 변화 (선물 유입/유출)"""
-    url = "https://api.bybit.com/v5/market/open-interest"
-    res = requests.get(url, params={
-        "category": "linear",
-        "symbol": "BTCUSDT",
-        "intervalTime": "1h",
-        "limit": 2
-    })
-    data = res.json()
-    items = data.get("result", {}).get("list", [])
-    if len(items) >= 2:
-        # list[0]이 최신, list[1]이 이전
-        latest_oi = float(items[0]["openInterest"])
-        prev_oi = float(items[1]["openInterest"])
-        price = get_btc_price()
-        change_usd = (latest_oi - prev_oi) * price
-        return change_usd, latest_oi * price
+    """OKX OI 변화 (선물 유입/유출)"""
+    try:
+        url = "https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-volume"
+        res = requests.get(url, params={"ccy": "BTC", "period": "1H"})
+        data = res.json()
+        items = data.get("data", [])
+        if len(items) >= 2:
+            latest_oi = float(items[0][1])
+            prev_oi = float(items[1][1])
+            price = get_btc_price()
+            change_usd = (latest_oi - prev_oi) * price
+            return change_usd, latest_oi * price
+    except Exception as e:
+        print(f"OI 오류: {e}")
     return None, None
 
 # ────────────────────────────────────────────
