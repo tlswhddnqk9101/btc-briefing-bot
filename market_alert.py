@@ -24,50 +24,37 @@ def get_btc_price():
     return float(data["data"][0]["last"])
 
 def get_long_short_ratio():
-    """OKX 롱/숏 비율"""
+    """OKX 롱/숏 비율 - 응답형식: [timestamp, longShortRatio]"""
     try:
         url = "https://www.okx.com/api/v5/rubik/stat/contracts/long-short-account-ratio"
         res = requests.get(url, params={"ccy": "BTC", "period": "1H"})
-        print(f"롱숏 응답: {res.status_code} {res.text[:300]}")
         data = res.json()
         items = data.get("data", [])
         if items:
-            long_pct = float(items[0][1]) * 100
-            short_pct = float(items[0][2]) * 100
-            ratio = long_pct / short_pct if short_pct > 0 else 1.0
+            # [timestamp, ratio] — ratio = long/short
+            ratio = float(items[0][1])
+            long_pct = ratio / (1 + ratio) * 100
+            short_pct = 100 - long_pct
             return ratio, long_pct, short_pct
     except Exception as e:
         print(f"롱숏 비율 오류: {e}")
     return None, None, None
 
 def get_liquidations():
-    """OKX 최근 1시간 청산 데이터"""
-    long_liq = 0.0
-    short_liq = 0.0
+    """OKX 청산 데이터 - rubik 통계 API 사용"""
     try:
-        url = "https://www.okx.com/api/v5/public/liquidation-orders"
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        one_hour_ago_ms = now_ms - 3600000
-        for side in ["buy", "sell"]:
-            res = requests.get(url, params={
-                "instType": "SWAP",
-                "instId": "BTC-USDT-SWAP",
-                "side": side,
-                "begin": one_hour_ago_ms,
-                "end": now_ms,
-                "limit": 100
-            })
-            items = res.json().get("data", [])
-            for item in items:
-                details = item.get("details", [])
-                total = sum(float(d.get("sz", 0)) * float(d.get("bkPx", 0)) for d in details)
-                if side == "sell":
-                    long_liq += total
-                else:
-                    short_liq += total
+        # [ts, longLiqUsd, shortLiqUsd]
+        url = "https://www.okx.com/api/v5/rubik/stat/contracts/liquidation-volume"
+        res = requests.get(url, params={"ccy": "BTC", "period": "1H"})
+        data = res.json()
+        items = data.get("data", [])
+        if items:
+            long_liq = float(items[0][1])
+            short_liq = float(items[0][2])
+            return long_liq, short_liq
     except Exception as e:
         print(f"청산 데이터 오류: {e}")
-    return long_liq, short_liq
+    return 0.0, 0.0
 
 def get_open_interest():
     """OKX OI 변화 (선물 유입/유출) - OI는 계약수가 아닌 USD 기준"""
