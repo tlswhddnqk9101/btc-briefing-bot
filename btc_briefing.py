@@ -32,19 +32,23 @@ def get_target_expiries():
     weekly = today + timedelta(days=days_to_friday)
     weekly_code = get_expiry_code(weekly)
 
-    # 이번 달 말 만기: 다음달 첫번째 금요일의 전주 금요일 (월말 마지막 금요일)
-    # 간단하게: 이달 마지막 금요일
-    year = today.year
-    month = today.month
-    # 다음달 1일
-    if month == 12:
-        next_month_first = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
-    else:
-        next_month_first = datetime(year, month + 1, 1, tzinfo=timezone.utc)
-    # 다음달 1일에서 뒤로 가서 마지막 금요일 찾기
-    last_friday = next_month_first - timedelta(days=1)
-    while last_friday.weekday() != 4:
-        last_friday -= timedelta(days=1)
+    # 월간 만기: 이달 마지막 금요일. 이미 지났거나 이번 주와 같으면 다음달 마지막 금요일
+    def last_friday_of_month(year, month):
+        if month == 12:
+            nxt = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            nxt = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+        lf = nxt - timedelta(days=1)
+        while lf.weekday() != 4:
+            lf -= timedelta(days=1)
+        return lf
+
+    last_friday = last_friday_of_month(today.year, today.month)
+    # 이번 주 만기와 같거나 이미 지났으면 다음달로
+    if last_friday.date() <= weekly.date():
+        nm = today.month + 1 if today.month < 12 else 1
+        ny = today.year if today.month < 12 else today.year + 1
+        last_friday = last_friday_of_month(ny, nm)
     monthly_code = get_expiry_code(last_friday)
 
     # 중복 제거
@@ -132,7 +136,7 @@ def send_briefing():
     for label, code, dt in expiries:
         options = filter_by_expiry(all_options, code)
         if not options:
-            msg += f"\n📅 {label} 만기 ({code})\n데이터 없음\n"
+            msg += f"\n📅 {label} 만기 ({code})\n아직 데이터 없음\n"
             continue
 
         max_pain, call_wall, put_wall = calculate_max_pain(options)
