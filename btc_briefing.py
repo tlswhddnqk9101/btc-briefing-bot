@@ -153,6 +153,8 @@ def generate_scenario(expiry_data, current_price):
             today_call = call_wall
         elif label == "내일":
             tomorrow_mp = max_pain
+            tomorrow_put = put_wall
+            tomorrow_call = call_wall
         elif label == "모레":
             day_after_mp = max_pain
         elif label == "이번 주 금요일":
@@ -171,9 +173,9 @@ def generate_scenario(expiry_data, current_price):
 
     # 단기 시나리오
     if today_mp and tomorrow_mp and day_after_mp:
-        # 오늘 박스 범위
-        if today_put and today_call:
-            lines.append(f"· 오늘      : ${today_put:,}~${today_call:,} 박스{'권 횡보 (핑퐁 스캘핑)' if is_weekend else ' 구간'}")
+        # 오늘 박스 범위: 오늘 풋벽 ~ 오늘 Max Pain (콜벽 아닌 MP 기준)
+        if today_put and today_mp:
+            lines.append(f"· 오늘      : ${today_put:,}~${today_mp:,} 박스{'권 횡보 (핑퐁 스캘핑)' if is_weekend else ' 구간'}")
 
         # 방향 판단
         if tomorrow_mp < today_mp:
@@ -244,7 +246,16 @@ def send_briefing():
                 direction = "하방" if max_pain < current_price else "상방"
                 msg += f"\n⚠️ 금요일 Max Pain ${max_pain:,} → {direction} 압력 존재"
                 if dist > 2000:
-                    msg += f", 현재가와 거리(${dist:,.0f})가 있어 ${put_wall:,} 이탈 전까지는 관망 필수"
+                    # 관망 기준은 오늘 풋벽 기준으로 (weekly put wall 아님)
+                    ref_put = None
+                    for ed_label, ed_code, ed_dt, ed_mp, ed_call, ed_put in expiry_data:
+                        if ed_label == "오늘" and ed_put:
+                            ref_put = ed_put
+                            break
+                    if ref_put:
+                        msg += f", 현재가와 거리(${dist:,.0f})가 있어 ${ref_put:,} 이탈 전까지는 관망 필수"
+                    else:
+                        msg += f", 현재가와 거리(${dist:,.0f})가 있어 단기 지지 이탈 전까지는 관망 필수"
 
     # ━━━ 월간 방향 ━━━
     msg += "\n\n━━━ 월간 방향 ━━━"
