@@ -3,7 +3,7 @@ name: BTC Briefing Bot
 
 on:
   schedule:
-    - cron: '0 20 * * *'  # 매일 05:00 KST
+    - cron: '0 20 * * *'
   workflow_dispatch:
 
 jobs:
