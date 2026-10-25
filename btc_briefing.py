@@ -133,16 +133,15 @@ def get_btc_price():
     return data["result"]["index_price"]
 
 def generate_scenario(expiry_data, current_price):
-    """옵션 데이터 기반 이번주 시나리오 자동 생성"""
+    """옵션 데이터 기반 이번주 시나리오 자동 생성 (트레이딩 감성 직관 언어)"""
 
     today_mp = None
+    today_put = None
+    today_call = None
     tomorrow_mp = None
-    day_after_mp = None
     weekly_mp = None
     weekly_put = None
     weekly_call = None
-    monthly_mp = None
-    weekly_dist = None
 
     for label, code, dt, max_pain, call_wall, put_wall in expiry_data:
         if max_pain is None:
@@ -153,53 +152,100 @@ def generate_scenario(expiry_data, current_price):
             today_call = call_wall
         elif label == "내일":
             tomorrow_mp = max_pain
-            tomorrow_put = put_wall
-            tomorrow_call = call_wall
-        elif label == "모레":
-            day_after_mp = max_pain
         elif label == "이번 주 금요일":
             weekly_mp = max_pain
             weekly_put = put_wall
             weekly_call = call_wall
-            weekly_dist = abs(current_price - max_pain)
-        elif label == "이번 달":
-            monthly_mp = max_pain
+
+    if not (today_mp and weekly_mp):
+        return ""
 
     lines = []
-
-    # 주말 여부 확인 (토/일)
     now = datetime.now(timezone.utc)
-    is_weekend = now.weekday() >= 5
+    is_weekend = now.weekday() >= 5  # 토/일
 
-    # 단기 시나리오
-    if today_mp and tomorrow_mp and day_after_mp:
-        # 오늘 박스 범위: 오늘 풋벽 ~ 오늘 Max Pain (콜벽 아닌 MP 기준)
-        if today_put and today_mp:
-            lines.append(f"· 오늘      : ${today_put:,}~${today_mp:,} 박스{'권 횡보 (핑퐁 스캘핑)' if is_weekend else ' 구간'}")
-
-        # 방향 판단
-        if tomorrow_mp < today_mp:
-            lines.append(f"· 내일~모레 : ${tomorrow_mp:,} 중심축 유지 및 서서히 흘러내림")
-        elif tomorrow_mp > today_mp:
-            lines.append(f"· 내일~모레 : ${tomorrow_mp:,} 중심, 위로 자력 작동")
+    # ── 중복 예외: breakline 계산 (핵심 분기점) ──
+    # 하방 시나리오: 풋벽 == 주간MP이면 현재가-500 사용
+    if weekly_mp < current_price:
+        if today_put and today_put != weekly_mp:
+            breakline = today_put
         else:
-            lines.append(f"· 내일~모레 : ${tomorrow_mp:,} 중심 횡보 유지")
-
-    # 주간 시나리오
-    if weekly_mp:
-        if weekly_dist and weekly_dist > 2000:
-            lines.append(f"· 수~목     : [핵심 분기점] ${today_put:,} 이탈 여부 확인 ➔ 이탈 시 ${weekly_mp:,} 방향 하방 압력")
-            lines.append(f"· 금요일    : ${weekly_mp:,} 수렴 시도 (단, 현물/ETF 대규모 변수 발생 시 무효화)")
+            breakline = int(current_price - 500)
+    else:
+        # 상방 시나리오: 콜벽 또는 주간MP+1000
+        if today_call and today_call != weekly_mp:
+            breakline = today_call
         else:
-            lines.append(f"· 이번주    : ${weekly_mp:,} 중심 수렴 시도")
+            breakline = int(current_price + 500)
 
-    # 한 줄 핵심
-    if weekly_mp and tomorrow_mp:
-        if weekly_mp < current_price:
-            core = f'"내일~모레는 ${tomorrow_mp:,} 자력에 묶여 횡보 대응, 수~목에 ${today_put:,} 이탈을 \'눈으로 확인\'한 뒤 ${weekly_mp:,} 하방 추세를 따라간다."'
+    weekly_dist = abs(current_price - weekly_mp)
+    mp_trend = (tomorrow_mp - today_mp) if tomorrow_mp else 0
+
+    # ── 오늘 구간 ──
+    if today_mp and today_put:
+        if current_price > today_mp:
+            today_line = f"${today_mp:,} 콜벽 저항 돌파 시도 — 자력 위쪽, 롱 세력 우위"
+        elif current_price < today_put:
+            today_line = f"${today_put:,} 풋벽 아래 이탈 — 하방 스위핑 진행 중"
+        elif is_weekend:
+            today_line = f"${today_put:,}~${today_mp:,} 박스권 핑퐁 스캘핑 구간"
         else:
-            core = f'"내일~모레는 ${tomorrow_mp:,} 중심 횡보, 이번주 방향은 ${weekly_mp:,} 수렴 시도."'
-        lines.append(f'\n💡 한 줄 핵심\n{core}')
+            # 현재가가 풋벽과 MP 사이 → MP 자석 위치 기준 설명
+            if weekly_mp < current_price:
+                today_line = f"${today_mp:,} 자석에 끌려 올라가는 반등과 하방 압력이 겹치는 박스권 핑퐁 구간"
+            else:
+                today_line = f"${today_mp:,} 자석 위로 상승 압력 — ${today_put:,}~${today_mp:,} 박스권 상단 돌파 여부 관건"
+        lines.append(f"· 오늘      : {today_line}")
+
+    # ── 내일~모레 방향 ──
+    if tomorrow_mp:
+        if mp_trend > 500:
+            lines.append(f"· 내일~모레 : ${tomorrow_mp:,} 자석 위로 이동 — 상방 자력 강화, 눌림목 롱 대응")
+        elif mp_trend < -500:
+            lines.append(f"· 내일~모레 : MP ${tomorrow_mp:,}으로 하락 이동 — 하방 압력 증가, 반등 시 숏 준비")
+        else:
+            # MP 횡보 → weekly MP 방향성 기준으로 설명
+            if weekly_mp < current_price:
+                lines.append(f"· 내일~모레 : ${today_mp:,} 부근에서 힘겨루기 횡보 (상·하방 이탈 나오는 쪽 따라붙기)")
+            else:
+                lines.append(f"· 내일~모레 : ${today_mp:,} 자석 중심 횡보 — 상방 돌파 시 추세 추종")
+    else:
+        lines.append(f"· 내일~모레 : ${today_mp:,} 자석 중심 횡보 유지 — 이탈 방향 추종")
+
+    # ── 수~목 핵심 분기점 ──
+    if weekly_mp < current_price:
+        # 하방 시나리오
+        if weekly_dist > 1500:
+            lines.append(f"· 수~목     : [핵심 분기점] ${breakline:,}이 무너지는지 확인 ➔ 깨지면 아래로 롱 청산 터지며 ${weekly_mp:,}까지 하방 가속")
+        else:
+            lines.append(f"· 수~목     : ${weekly_mp:,} 근접 수렴 — 단기 반등 나오면 즉시 숏 이탈 스위치 ON")
+    else:
+        # 상방 시나리오
+        if weekly_dist > 1500:
+            lines.append(f"· 수~목     : [핵심 분기점] ${breakline:,} 돌파 확인 ➔ 숏 청산 터지며 ${weekly_mp:,}까지 상방 가속")
+        else:
+            lines.append(f"· 수~목     : ${weekly_mp:,} 근접 수렴 — 단기 눌림 나오면 즉시 롱 이탈 스위치 ON")
+
+    # ── 금요일 ──
+    direction_kr = "하방" if weekly_mp < current_price else "상방"
+    if weekly_dist > 2000:
+        lines.append(f"· 금요일    : 주간 목표가 ${weekly_mp:,}로 가려는 힘 작용 (단, 대형 현물 호재/악재 들어오면 무효)")
+    else:
+        lines.append(f"· 금요일    : ${weekly_mp:,} 수렴 거의 확정 — 만기 당일 변동성 주의, 무리한 추격 금지")
+
+    # ── 한 줄 핵심 ──
+    if weekly_mp < current_price:
+        if mp_trend >= 0:
+            core = f'"화요일까지는 ${today_mp:,} 자력에 묶여 횡보, 수~목에 지지선(${breakline:,})이 깨지는 걸 눈으로 확인한 뒤 ${weekly_mp:,}을 향해 숏으로 따라붙는다."'
+        else:
+            core = f'"단기~주간 MP 모두 하방 정렬 — ${breakline:,} 이탈 확인 즉시 ${weekly_mp:,} 타깃 숏 대응."'
+    else:
+        if mp_trend <= 0:
+            core = f'"단기 조정 이후 주간 MP ${weekly_mp:,} 상방 자력 작동 — ${breakline:,} 돌파 확인 시 롱으로 따라붙는다."'
+        else:
+            core = f'"단기~주간 MP 모두 상방 정렬 — ${breakline:,} 돌파 확인 즉시 ${weekly_mp:,} 타깃 롱 대응."'
+
+    lines.append(f'\n💡 한 줄 핵심\n{core}')
 
     return "\n".join(lines)
 
